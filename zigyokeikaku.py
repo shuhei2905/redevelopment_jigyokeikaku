@@ -169,9 +169,10 @@ def main():
                 st.markdown("**💰 相場価格 vs 提示価格**")
                 chart_data = calc_df[["地権者名", "相場価格", "提示価格"]].melt("地権者名", var_name="種別", value_name="金額(万円)")
                 chart = alt.Chart(chart_data).mark_bar().encode(
-                    x=alt.X('地権者名', sort=None),
+                    x=alt.X('地権者名', sort=None, axis=alt.Axis(labelAngle=0)),
                     y='金額(万円)',
                     color=alt.Color('種別', scale=alt.Scale(domain=['相場価格', '提示価格'], range=['#A9A9A9', '#FF6347'])),
+                    xOffset='種別',
                     tooltip=['地権者名', '種別', '金額(万円)']
                 ).properties(height=300)
                 st.altair_chart(chart, use_container_width=True)
