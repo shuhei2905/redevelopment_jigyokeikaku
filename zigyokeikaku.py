@@ -134,7 +134,7 @@ def main():
         st.write("---")
         
         # --- 1.5 諸経費・販管費設定 ---
-        st.subheader("📝 諸経費・販管費設定")
+        st.subheader("📝 経費設定")
         
         cost_col1, cost_col2 = st.columns(2)
         
@@ -146,17 +146,24 @@ def main():
                 step=0.5,
                 help="登記費用、不動産取得税など"
             )
-            survey_cost = st.number_input(
-                "測量費用（万円）", 
-                value=0, 
-                step=10,
-                help="測量にかかる費用"
-            )
-            settlement_cost = st.number_input(
-                "即決和解費用（万円）", 
-                value=0, 
-                step=10,
-                help="即決和解にかかる費用"
+            
+            # 動的に経費を追加できるエディタ
+            st.caption("👇 その他経費（＋ボタンで追加）")
+            if 'expense_df' not in st.session_state:
+                st.session_state.expense_df = pd.DataFrame({
+                    "経費名": pd.Series(dtype='str'),
+                    "金額（万円）": pd.Series(dtype='int')
+                })
+            
+            edited_expense_df = st.data_editor(
+                st.session_state.expense_df,
+                num_rows="dynamic",
+                use_container_width=True,
+                column_config={
+                    "経費名": st.column_config.TextColumn("経費名", width="medium"),
+                    "金額（万円）": st.column_config.NumberColumn("金額（万円）", format="%d", min_value=0, default=0),
+                },
+                key="expense_editor"
             )
         
         with cost_col2:
@@ -167,6 +174,7 @@ def main():
                 step=10,
                 help="売却時の仲介手数料"
             )
+            
             st.markdown("**調達条件（PJ純利益計算用）**")
             ltv_rate = st.number_input(
                 "LTV（対仕入れ値）(%)", 
@@ -186,6 +194,11 @@ def main():
                 step=0.1,
                 help="融資手数料"
             )
+        
+        # その他経費の合計を計算
+        other_expenses_df = edited_expense_df.copy()
+        other_expenses_df["金額（万円）"] = pd.to_numeric(other_expenses_df["金額（万円）"], errors='coerce').fillna(0)
+        other_expenses_total = other_expenses_df["金額（万円）"].sum()
 
         st.write("---")
 
@@ -287,7 +300,7 @@ def main():
         # === PL計算 ===
         # 諸経費
         acquisition_cost = total_offer_sum * acquisition_cost_rate / 100.0  # 物件取得経費
-        total_expenses = acquisition_cost + survey_cost + settlement_cost   # 諸経費合計
+        total_expenses = acquisition_cost + other_expenses_total   # 諸経費合計
         
         # 粗利Ⅰ = 売上 - 売上原価 - 諸経費
         gross_profit_1 = exit_gross - total_offer_sum - total_expenses
@@ -353,23 +366,39 @@ def main():
             pl_data = [
                 {"項目": "売上", "金額（万円）": f"{exit_gross:,.0f}", "率": ""},
                 {"項目": "売上原価（仕入れ値）", "金額（万円）": f"{total_offer_sum:,.0f}", "率": ""},
-                {"項目": "　├ 物件取得経費", "金額（万円）": f"{acquisition_cost:,.0f}", "率": f"{acquisition_cost_rate:.1f}%"},
-                {"項目": "　├ 測量費用", "金額（万円）": f"{survey_cost:,.0f}", "率": ""},
-                {"項目": "　└ 即決和解費用", "金額（万円）": f"{settlement_cost:,.0f}", "率": ""},
+                {"項目": "諸経費", "金額（万円）": f"{total_expenses:,.0f}", "率": ""},
                 {"項目": "🔵 売上総利益（粗利Ⅰ）", "金額（万円）": f"{gross_profit_1:,.0f}", "率": f"{gross_profit_1_rate:.1f}%"},
-                {"項目": "販管費", "金額（万円）": "", "率": ""},
-                {"項目": "　└ 仲介手数料", "金額（万円）": f"{brokerage_fee:,.0f}", "率": ""},
+                {"項目": "仲介手数料", "金額（万円）": f"{brokerage_fee:,.0f}", "率": ""},
                 {"項目": "🔵 営業利益（粗利Ⅱ）", "金額（万円）": f"{gross_profit_2:,.0f}", "率": f"{gross_profit_2_rate:.1f}%"},
                 {"項目": "調達コスト", "金額（万円）": f"{total_financing_cost:,.0f}", "率": ""},
-                {"項目": f"　├ 調達額（LTV {ltv_rate:.0f}%）", "金額（万円）": f"{debt_amount:,.0f}", "率": ""},
-                {"項目": f"　├ 保有期間", "金額（万円）": f"{holding_period_years:.2f}年", "率": f"{project_months}ヶ月"},
-                {"項目": f"　├ 金利", "金額（万円）": f"{loan_interest:,.0f}", "率": f"{loan_interest_rate:.2f}%"},
-                {"項目": f"　└ Upfront", "金額（万円）": f"{upfront_fee:,.0f}", "率": f"{upfront_rate:.1f}%"},
                 {"項目": "🟢 PJ純利益", "金額（万円）": f"{pj_net_profit:,.0f}", "率": f"{pj_net_profit_rate:.1f}%"},
             ]
             
             pl_df = pd.DataFrame(pl_data)
             st.dataframe(pl_df, hide_index=True, use_container_width=True)
+            
+            # 諸経費の内訳を折りたたみで表示
+            with st.expander("▼ 諸経費の内訳"):
+                expense_detail = [
+                    {"項目": "物件取得経費", "金額（万円）": f"{acquisition_cost:,.0f}"}
+                ]
+                for _, row in other_expenses_df.iterrows():
+                    if row["金額（万円）"] > 0:
+                        expense_detail.append({
+                            "項目": row["経費名"] if row["経費名"] else "その他",
+                            "金額（万円）": f"{row['金額（万円）']:,.0f}"
+                        })
+                st.dataframe(pd.DataFrame(expense_detail), hide_index=True, use_container_width=True)
+            
+            # 調達コストの内訳を折りたたみで表示
+            with st.expander("▼ 調達コストの内訳"):
+                financing_detail = [
+                    {"項目": f"調達額（LTV {ltv_rate:.0f}%）", "金額（万円）": f"{debt_amount:,.0f}"},
+                    {"項目": f"保有期間", "金額（万円）": f"{project_months}ヶ月（{holding_period_years:.2f}年）"},
+                    {"項目": f"金利（{loan_interest_rate:.2f}%）", "金額（万円）": f"{loan_interest:,.0f}"},
+                    {"項目": f"Upfront（{upfront_rate:.1f}%）", "金額（万円）": f"{upfront_fee:,.0f}"},
+                ]
+                st.dataframe(pd.DataFrame(financing_detail), hide_index=True, use_container_width=True)
         
         with pl_col2:
             # サマリーメトリクス
