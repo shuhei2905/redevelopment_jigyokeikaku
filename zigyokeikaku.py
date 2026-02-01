@@ -123,15 +123,69 @@ def main():
         # --- 1. 出口条件設定 ---
         st.subheader("📋 基本条件設定")
         with st.container():
-            col_cond1, col_cond2, col_cond3, col_cond4 = st.columns(4)
+            col_cond1, col_cond2 = st.columns(2)
             if 'target_far' not in st.session_state: st.session_state.target_far = 300.0
             if 'exit_unit_price' not in st.session_state: st.session_state.exit_unit_price = 100
-            if 'acquisition_cost_rate' not in st.session_state: st.session_state.acquisition_cost_rate = 5.0
 
             far = col_cond1.number_input("従後容積(%)", value=st.session_state.target_far, step=10.0)
             exit_unit_price = col_cond2.number_input("出口一種単価(万円)", value=st.session_state.exit_unit_price, step=10)
-            acquisition_cost_rate = col_cond3.number_input("物件取得経費（対土地代）(%)", value=st.session_state.acquisition_cost_rate, step=0.5)
             far_ratio = far / 100.0 if far > 0 else 1.0
+
+        st.write("---")
+        
+        # --- 1.5 諸経費・販管費設定 ---
+        st.subheader("📝 諸経費・販管費設定")
+        
+        cost_col1, cost_col2 = st.columns(2)
+        
+        with cost_col1:
+            st.markdown("**諸経費（粗利Ⅰ計算用）**")
+            acquisition_cost_rate = st.number_input(
+                "物件取得経費（対土地代）(%)", 
+                value=5.0, 
+                step=0.5,
+                help="登記費用、不動産取得税など"
+            )
+            survey_cost = st.number_input(
+                "測量費用（万円）", 
+                value=0, 
+                step=10,
+                help="測量にかかる費用"
+            )
+            settlement_cost = st.number_input(
+                "即決和解費用（万円）", 
+                value=0, 
+                step=10,
+                help="即決和解にかかる費用"
+            )
+        
+        with cost_col2:
+            st.markdown("**販管費（粗利Ⅱ計算用）**")
+            brokerage_fee = st.number_input(
+                "仲介手数料（万円）", 
+                value=0, 
+                step=10,
+                help="売却時の仲介手数料"
+            )
+            st.markdown("**調達条件（PJ純利益計算用）**")
+            ltv_rate = st.number_input(
+                "LTV（対仕入れ値）(%)", 
+                value=80.0, 
+                step=5.0,
+                help="Loan to Value：借入比率"
+            )
+            loan_interest_rate = st.number_input(
+                "金利（対調達額・年率）(%)", 
+                value=2.0, 
+                step=0.1,
+                help="借入金利"
+            )
+            upfront_rate = st.number_input(
+                "Upfront（対調達額）(%)", 
+                value=1.0, 
+                step=0.1,
+                help="融資手数料"
+            )
 
         st.write("---")
 
@@ -147,16 +201,10 @@ def main():
             inc_col1, inc_col2 = st.columns(2)
             
             with inc_col1:
-                st.markdown("**📊 資金調達条件**")
-                debt_amount = st.number_input(
-                    "借入金額（万円）", 
-                    value=4000, 
-                    step=100,
-                    help="融資により調達する金額"
-                )
+                st.markdown("**📊 案件期間**")
                 project_months = st.number_input(
-                    "案件期間（月数）", 
-                    value=12, 
+                    "保有期間（月数）", 
+                    value=6, 
                     min_value=1, 
                     max_value=60,
                     help="仕入れから売却までの期間"
@@ -230,17 +278,37 @@ def main():
 
         # 全体集計
         total_area_sum = calc_df["面積"].sum()
-        total_offer_sum = calc_df["提示価格"].sum()  # 仕入れ値
+        total_offer_sum = calc_df["提示価格"].sum()  # 仕入れ値（売上原価）
         total_market_sum = calc_df["相場価格"].sum()
         
-        # 物件取得経費の計算
-        acquisition_cost = total_offer_sum * acquisition_cost_rate / 100.0
+        # 出口グロス（売上）
+        exit_gross = total_area_sum * far_ratio * exit_unit_price
         
-        finish_price = total_offer_sum / total_area_sum / far_ratio if (total_area_sum > 0 and far_ratio > 0) else 0
-        exit_gross = total_area_sum * far_ratio * exit_unit_price  # 売値
-        profit = exit_gross - total_offer_sum - acquisition_cost  # 案件粗利
+        # === PL計算 ===
+        # 諸経費
+        acquisition_cost = total_offer_sum * acquisition_cost_rate / 100.0  # 物件取得経費
+        total_expenses = acquisition_cost + survey_cost + settlement_cost   # 諸経費合計
+        
+        # 粗利Ⅰ = 売上 - 売上原価 - 諸経費
+        gross_profit_1 = exit_gross - total_offer_sum - total_expenses
+        gross_profit_1_rate = gross_profit_1 / exit_gross * 100 if exit_gross > 0 else 0
+        
+        # 粗利Ⅱ = 粗利Ⅰ - 仲介手数料
+        gross_profit_2 = gross_profit_1 - brokerage_fee
+        gross_profit_2_rate = gross_profit_2 / exit_gross * 100 if exit_gross > 0 else 0
+        
+        # 調達コスト計算
+        debt_amount = total_offer_sum * ltv_rate / 100.0  # 調達額 = 仕入れ値 × LTV
+        holding_period_years = project_months / 12.0
+        loan_interest = debt_amount * (loan_interest_rate / 100.0) * holding_period_years  # 金利
+        upfront_fee = debt_amount * (upfront_rate / 100.0)  # Upfront
+        total_financing_cost = loan_interest + upfront_fee  # 調達コスト合計
+        
+        # PJ純利益 = 粗利Ⅱ - 調達コスト
+        pj_net_profit = gross_profit_2 - total_financing_cost
+        pj_net_profit_rate = pj_net_profit / exit_gross * 100 if exit_gross > 0 else 0
 
-        # --- 5. インセンティブ計算 ---
+        # --- 5. インセンティブ計算（粗利Ⅰベース） ---
         # 自己資本 = 仕入れ値 - 借入
         equity_amount = total_offer_sum - debt_amount if total_offer_sum > debt_amount else 0
         
@@ -261,8 +329,8 @@ def main():
             months=project_months
         )
         
-        # インセンティブ計算対象粗利
-        incentive_base_profit = profit - capital_cost
+        # インセンティブ計算対象粗利 = 粗利Ⅰ - 資本コスト
+        incentive_base_profit = gross_profit_1 - capital_cost
         
         # インセンティブ率取得
         incentive_rate = get_incentive_rate(grade, is_solo_pm)
@@ -274,21 +342,57 @@ def main():
         
         # インセンティブ金額
         incentive_amount = incentive_base_profit * incentive_rate if incentive_base_profit > 0 else 0
-        
-        profit_margin = profit / exit_gross * 100 if exit_gross > 0 else 0
 
-        # --- 6. 重要指標 (Metrics) ---
-        st.markdown("### 📊 シミュレーション結果")
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
-        m1.metric("敷地面積合計", f"{total_area_sum:,.2f} 坪")
-        m2.metric("提示価格合計（仕入れ値）", f"{total_offer_sum:,.0f} 万円")
-        m3.metric("物件取得経費", f"{acquisition_cost:,.0f} 万円")
-        m4.metric("出口グロス（売値）", f"{exit_gross:,.0f} 万円")
-        m5.metric("想定利益（案件粗利）", f"{profit:,.0f} 万円", delta=f"{profit:,.0f} 万円" if profit != 0 else None)
-        m6.metric("利益率", f"{profit_margin:.2f} %", delta=f"{profit_margin:.2f} %" if profit_margin != 0 else None)
+        # --- 6. PL形式の結果表示 ---
+        st.markdown("### 📊 PL（損益計算）")
+        
+        # PLテーブル形式で表示
+        pl_col1, pl_col2 = st.columns([2, 1])
+        
+        with pl_col1:
+            pl_data = [
+                {"項目": "売上", "金額": f"{exit_gross:,.0f}", "率": ""},
+                {"項目": "売上原価（仕入れ値）", "金額": f"{total_offer_sum:,.0f}", "率": ""},
+                {"項目": "　├ 物件取得経費", "金額": f"{acquisition_cost:,.0f}", "率": f"{acquisition_cost_rate:.1f}%"},
+                {"項目": "　├ 測量費用", "金額": f"{survey_cost:,.0f}", "率": ""},
+                {"項目": "　└ 即決和解費用", "金額": f"{settlement_cost:,.0f}", "率": ""},
+                {"項目": "**売上総利益（粗利Ⅰ）**", "金額": f"**{gross_profit_1:,.0f}**", "率": f"**{gross_profit_1_rate:.1f}%**"},
+                {"項目": "販管費", "金額": "", "率": ""},
+                {"項目": "　└ 仲介手数料", "金額": f"{brokerage_fee:,.0f}", "率": ""},
+                {"項目": "**営業利益（粗利Ⅱ）**", "金額": f"**{gross_profit_2:,.0f}**", "率": f"**{gross_profit_2_rate:.1f}%**"},
+                {"項目": "調達コスト", "金額": f"{total_financing_cost:,.0f}", "率": ""},
+                {"項目": f"　├ 調達額（LTV {ltv_rate:.0f}%）", "金額": f"{debt_amount:,.0f}", "率": ""},
+                {"項目": f"　├ 保有期間", "金額": f"{holding_period_years:.2f}", "率": f"{project_months}ヶ月"},
+                {"項目": f"　├ 金利", "金額": f"{loan_interest:,.0f}", "率": f"{loan_interest_rate:.2f}%"},
+                {"項目": f"　└ Upfront", "金額": f"{upfront_fee:,.0f}", "率": f"{upfront_rate:.1f}%"},
+                {"項目": "**PJ純利益**", "金額": f"**{pj_net_profit:,.0f}**", "率": f"**{pj_net_profit_rate:.1f}%**"},
+            ]
+            
+            pl_df = pd.DataFrame(pl_data)
+            st.markdown(pl_df.to_markdown(index=False), unsafe_allow_html=True)
+        
+        with pl_col2:
+            # サマリーメトリクス
+            st.metric("敷地面積合計", f"{total_area_sum:,.2f} 坪")
+            
+            if gross_profit_1 >= 0:
+                st.metric("粗利Ⅰ", f"{gross_profit_1:,.0f} 万円", delta=f"{gross_profit_1_rate:.1f}%")
+            else:
+                st.metric("粗利Ⅰ", f"{gross_profit_1:,.0f} 万円", delta=f"{gross_profit_1_rate:.1f}%", delta_color="inverse")
+            
+            if gross_profit_2 >= 0:
+                st.metric("粗利Ⅱ", f"{gross_profit_2:,.0f} 万円", delta=f"{gross_profit_2_rate:.1f}%")
+            else:
+                st.metric("粗利Ⅱ", f"{gross_profit_2:,.0f} 万円", delta=f"{gross_profit_2_rate:.1f}%", delta_color="inverse")
+            
+            if pj_net_profit >= 0:
+                st.metric("PJ純利益", f"{pj_net_profit:,.0f} 万円", delta=f"{pj_net_profit_rate:.1f}%")
+            else:
+                st.metric("PJ純利益", f"{pj_net_profit:,.0f} 万円", delta=f"{pj_net_profit_rate:.1f}%", delta_color="inverse")
 
         # --- 7. インセンティブ計算結果 ---
         st.markdown("### 💵 インセンティブ計算結果")
+        st.caption("※インセンティブは **粗利Ⅰ** から資本コストを差し引いた金額をベースに計算")
         
         inc_result_col1, inc_result_col2 = st.columns(2)
         
@@ -298,7 +402,7 @@ def main():
             # 計算過程をテーブルで表示
             calc_process = pd.DataFrame({
                 "項目": [
-                    "① 案件粗利",
+                    "① 粗利Ⅰ",
                     "② 自己資本（Equity）",
                     "③ 借入（Debt）",
                     "④ 自己資本比率（we）",
@@ -308,7 +412,7 @@ def main():
                     "⑧ インセンティブ対象粗利（①-⑦）",
                 ],
                 "計算式/値": [
-                    f"{profit:,.0f} 万円",
+                    f"{gross_profit_1:,.0f} 万円",
                     f"{equity_amount:,.0f} 万円",
                     f"{debt_amount:,.0f} 万円",
                     f"{equity_amount / (equity_amount + debt_amount) * 100:.1f} %" if (equity_amount + debt_amount) > 0 else "0 %",
@@ -334,7 +438,7 @@ def main():
             st.info(f"""
             **等級**: {grade}  
             **インセンティブ率**: {rate_display}  
-            **対象粗利**: {incentive_base_profit:,.0f} 万円
+            **対象粗利（粗利Ⅰ-資本コスト）**: {incentive_base_profit:,.0f} 万円
             """)
             
             if incentive_base_profit > 0:
@@ -378,26 +482,30 @@ def main():
 
             with g_col2:
                 st.markdown("**🏗 事業収支の構成**")
-                if profit > 0:
-                    donut_data = pd.DataFrame({
-                        "category": ["原価(取得費)", "物件取得経費", "資本コスト", "想定利益"],
-                        "value": [total_offer_sum, acquisition_cost, capital_cost, incentive_base_profit if incentive_base_profit > 0 else 0]
-                    })
+                if exit_gross > 0:
+                    # コスト内訳
+                    cost_breakdown = [
+                        {"category": "売上原価", "value": max(total_offer_sum, 0)},
+                        {"category": "諸経費", "value": max(total_expenses, 0)},
+                        {"category": "仲介手数料", "value": max(brokerage_fee, 0)},
+                        {"category": "調達コスト", "value": max(total_financing_cost, 0)},
+                        {"category": "PJ純利益", "value": max(pj_net_profit, 0)},
+                    ]
+                    donut_data = pd.DataFrame(cost_breakdown)
                     donut_chart = alt.Chart(donut_data).mark_arc(innerRadius=50).encode(
                         theta=alt.Theta(field="value", type="quantitative"),
                         color=alt.Color(field="category", type="nominal", scale=alt.Scale(
-                            domain=["原価(取得費)", "物件取得経費", "資本コスト", "想定利益"],
-                            range=['#D3D3D3', '#FFB6C1', '#87CEEB', '#32CD32']
+                            domain=["売上原価", "諸経費", "仲介手数料", "調達コスト", "PJ純利益"],
+                            range=['#D3D3D3', '#FFB6C1', '#DDA0DD', '#87CEEB', '#32CD32']
                         )),
                         tooltip=["category", "value"]
                     ).properties(height=300)
                     st.altair_chart(donut_chart, use_container_width=True)
                 else:
-                    st.warning("⚠️ 現在、赤字収支です。")
-                    st.bar_chart(pd.DataFrame({"金額": [exit_gross, total_offer_sum]}, index=["出口グロス", "提示価格合計"]))
+                    st.warning("⚠️ データを入力してください")
 
             # 詳細テーブル
-            with st.expander("▼ 計算詳細・内訳を見る", expanded=False):
+            with st.expander("▼ 地権者別計算詳細を見る", expanded=False):
                 st.dataframe(calc_df.style.format({
                     "面積": "{:.2f}",
                     "相場価格": "{:,.0f}",
