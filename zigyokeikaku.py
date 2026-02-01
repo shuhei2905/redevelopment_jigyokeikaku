@@ -48,7 +48,7 @@ def save_project(name, total_area, target_far, exit_unit_price, df_landowners):
         c.execute('''
             INSERT INTO landowners (project_id, name, area, market_price, offer_price)
             VALUES (?, ?, ?, ?, ?)
-        ''', (project_id, row['地権者名'], row['面積'], row['相場価格'], row['提示価格']))
+        ''', (project_id, row['地権者名'], row['面積（坪）'], row['相場金額（坪）'], row['提案金額（坪）']))
     
     conn.commit()
     conn.close()
@@ -151,8 +151,8 @@ def main():
             st.caption("👇 その他経費（＋ボタンで追加）")
             if 'expense_df' not in st.session_state:
                 st.session_state.expense_df = pd.DataFrame({
-                    "経費名": pd.Series(dtype='str'),
-                    "金額（万円）": pd.Series(dtype='int')
+                    "経費名": ["測量費用", "即決和解費用"],
+                    "金額（万円）": [0, 0]
                 })
             
             edited_expense_df = st.data_editor(
@@ -260,9 +260,9 @@ def main():
         if 'input_df' not in st.session_state:
             st.session_state.input_df = pd.DataFrame({
                 "地権者名": pd.Series(dtype='str'),
-                "面積": pd.Series(dtype='float'),
-                "相場価格": pd.Series(dtype='int'),
-                "提示価格": pd.Series(dtype='int')
+                "面積（坪）": pd.Series(dtype='float'),
+                "相場金額（坪）": pd.Series(dtype='int'),
+                "提案金額（坪）": pd.Series(dtype='int'),
             })
 
         edited_df = st.data_editor(
@@ -271,28 +271,44 @@ def main():
             use_container_width=True,
             column_config={
                 "地権者名": st.column_config.TextColumn("地権者名", required=True),
-                "面積": st.column_config.NumberColumn("面積 (坪)", format="%.2f", min_value=0.0, default=0.0),
-                "相場価格": st.column_config.NumberColumn("相場価格 (万円)", format="%d", min_value=0, default=0),
-                "提示価格": st.column_config.NumberColumn("提示価格 (万円)", format="%d", min_value=0, default=0),
+                "面積（坪）": st.column_config.NumberColumn("面積（坪）", format="%.2f", min_value=0.0, default=0.0),
+                "相場金額（坪）": st.column_config.NumberColumn("相場金額（坪）", format="%d 万円", min_value=0, default=0),
+                "提案金額（坪）": st.column_config.NumberColumn("提案金額（坪）", format="%d 万円", min_value=0, default=0),
             },
             key="main_editor"
         )
 
         # --- 4. リアルタイム計算処理 ---
         calc_df = edited_df.copy()
-        calc_df["面積"] = pd.to_numeric(calc_df["面積"], errors='coerce').fillna(0.0)
-        calc_df["相場価格"] = pd.to_numeric(calc_df["相場価格"], errors='coerce').fillna(0)
-        calc_df["提示価格"] = pd.to_numeric(calc_df["提示価格"], errors='coerce').fillna(0)
+        calc_df["面積（坪）"] = pd.to_numeric(calc_df["面積（坪）"], errors='coerce').fillna(0.0)
+        calc_df["相場金額（坪）"] = pd.to_numeric(calc_df["相場金額（坪）"], errors='coerce').fillna(0)
+        calc_df["提案金額（坪）"] = pd.to_numeric(calc_df["提案金額（坪）"], errors='coerce').fillna(0)
 
-        # 個別計算
-        calc_df["差額"] = calc_df["提示価格"] - calc_df["相場価格"]
-        calc_df["坪単価"] = calc_df.apply(lambda x: x["提示価格"] / x["面積"] if x["面積"] > 0 else 0, axis=1)
-        calc_df["一種単価"] = calc_df.apply(lambda x: x["坪単価"] / far_ratio if far_ratio > 0 else 0, axis=1)
+        # グロス金額を計算
+        calc_df["相場金額（グロス）"] = calc_df["面積（坪）"] * calc_df["相場金額（坪）"]
+        calc_df["提案金額（グロス）"] = calc_df["面積（坪）"] * calc_df["提案金額（坪）"]
+        calc_df["差額（グロス）"] = calc_df["提案金額（グロス）"] - calc_df["相場金額（グロス）"]
+        calc_df["一種単価"] = calc_df.apply(lambda x: x["提案金額（坪）"] / far_ratio if far_ratio > 0 else 0, axis=1)
+
+        # 計算結果を表示
+        if len(calc_df) > 0 and calc_df["面積（坪）"].sum() > 0:
+            st.caption("📊 計算結果（自動計算）")
+            display_df = calc_df[["地権者名", "面積（坪）", "相場金額（坪）", "提案金額（坪）", "提案金額（グロス）"]].copy()
+            st.dataframe(
+                display_df.style.format({
+                    "面積（坪）": "{:.2f}",
+                    "相場金額（坪）": "{:,.0f}",
+                    "提案金額（坪）": "{:,.0f}",
+                    "提案金額（グロス）": "{:,.0f}",
+                }),
+                hide_index=True,
+                use_container_width=True
+            )
 
         # 全体集計
-        total_area_sum = calc_df["面積"].sum()
-        total_offer_sum = calc_df["提示価格"].sum()  # 仕入れ値（売上原価）
-        total_market_sum = calc_df["相場価格"].sum()
+        total_area_sum = calc_df["面積（坪）"].sum()
+        total_offer_sum = calc_df["提案金額（グロス）"].sum()  # 仕入れ値（売上原価）
+        total_market_sum = calc_df["相場金額（グロス）"].sum()
         
         # 出口グロス（売上）
         exit_gross = total_area_sum * far_ratio * exit_unit_price
@@ -498,12 +514,12 @@ def main():
             g_col1, g_col2 = st.columns(2)
             
             with g_col1:
-                st.markdown("**💰 相場価格 vs 提示価格**")
-                chart_data = calc_df[["地権者名", "相場価格", "提示価格"]].melt("地権者名", var_name="種別", value_name="金額(万円)")
+                st.markdown("**💰 相場金額 vs 提案金額（グロス）**")
+                chart_data = calc_df[["地権者名", "相場金額（グロス）", "提案金額（グロス）"]].melt("地権者名", var_name="種別", value_name="金額(万円)")
                 chart = alt.Chart(chart_data).mark_bar().encode(
                     x=alt.X('地権者名', sort=None, axis=alt.Axis(labelAngle=0)),
                     y='金額(万円)',
-                    color=alt.Color('種別', scale=alt.Scale(domain=['相場価格', '提示価格'], range=['#A9A9A9', '#FF6347'])),
+                    color=alt.Color('種別', scale=alt.Scale(domain=['相場金額（グロス）', '提案金額（グロス）'], range=['#A9A9A9', '#FF6347'])),
                     xOffset='種別',
                     tooltip=['地権者名', '種別', '金額(万円)']
                 ).properties(height=300)
@@ -536,11 +552,12 @@ def main():
             # 詳細テーブル
             with st.expander("▼ 地権者別計算詳細を見る", expanded=False):
                 st.dataframe(calc_df.style.format({
-                    "面積": "{:.2f}",
-                    "相場価格": "{:,.0f}",
-                    "提示価格": "{:,.0f}",
-                    "差額": "{:,.0f}",
-                    "坪単価": "{:,.2f}",
+                    "面積（坪）": "{:.2f}",
+                    "相場金額（坪）": "{:,.0f}",
+                    "提案金額（坪）": "{:,.0f}",
+                    "相場金額（グロス）": "{:,.0f}",
+                    "提案金額（グロス）": "{:,.0f}",
+                    "差額（グロス）": "{:,.0f}",
                     "一種単価": "{:,.2f}"
                 }), use_container_width=True)
 
@@ -570,7 +587,7 @@ def main():
                     with c1:
                         st.caption(f"敷地: {project['total_area']:.2f}坪 | 容積: {project['target_far']}% | 出口一種: {project['exit_unit_price']}万円")
                         st.dataframe(landowners_df[["name", "area", "market_price", "offer_price"]].rename(columns={
-                            "name": "地権者名", "area": "面積", "market_price": "相場価格", "offer_price": "提示価格"
+                            "name": "地権者名", "area": "面積（坪）", "market_price": "相場金額（坪）", "offer_price": "提案金額（坪）"
                         }), hide_index=True)
                     
                     with c2:
@@ -583,12 +600,12 @@ def main():
                             for _, l_row in landowners_df.iterrows():
                                 loaded_data.append({
                                     "地権者名": l_row['name'],
-                                    "面積": l_row['area'],
-                                    "相場価格": l_row['market_price'],
-                                    "提示価格": l_row['offer_price']
+                                    "面積（坪）": l_row['area'],
+                                    "相場金額（坪）": l_row['market_price'],
+                                    "提案金額（坪）": l_row['offer_price']
                                 })
                             st.session_state.input_df = pd.DataFrame(loaded_data).astype({
-                                "地権者名": "str", "面積": "float", "相場価格": "int", "提示価格": "int"
+                                "地権者名": "str", "面積（坪）": "float", "相場金額（坪）": "int", "提案金額（坪）": "int"
                             })
                             st.session_state.target_far = project['target_far']
                             st.session_state.exit_unit_price = project['exit_unit_price']
