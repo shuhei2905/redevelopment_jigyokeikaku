@@ -3,14 +3,8 @@ import pandas as pd
 import sqlite3
 import datetime
 import altair as alt
-import os
-
 # --- データベース設定 ---
-# 永続的な保存場所を確保
-PERSISTENT_DIR = '/sessions/admiring-determined-noether/mnt/outputs'
-os.makedirs(PERSISTENT_DIR, exist_ok=True)
-DB_NAME = os.path.join(PERSISTENT_DIR, 'biz_plan.db')
-
+DB_NAME = 'biz_plan.db'
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -110,10 +104,6 @@ def get_incentive_rate(grade, is_solo_pm=False):
 def main():
     st.set_page_config(page_title="事業計画シミュレーター", layout="wide")
     init_db()
-
-    # データベースの保存場所を表示
-    st.sidebar.info(f"💾 データ保存先:\n`{DB_NAME}`")
-
     menu = st.sidebar.radio("メニュー", ["シミュレーション実行", "保存データ一覧"])
     if menu == "シミュレーション実行":
         st.title("🏗 事業計画シミュレーター")
@@ -342,6 +332,7 @@ def main():
             months=project_months
         )
 
+        # 🔴 変更箇所: 粗利Ⅰから粗利Ⅱに変更
         # インセンティブ計算対象粗利 = 粗利Ⅱ - 資本コスト
         incentive_base_profit = gross_profit_2 - capital_cost
 
